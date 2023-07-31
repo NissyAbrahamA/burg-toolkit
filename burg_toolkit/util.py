@@ -62,20 +62,24 @@ def angle(vec_a, vec_b, sign_array=None, as_degree=True):
              The values will be in the range [-pi/2, pi/2] or [-90, 90].
     """
     dotp = np.sum(vec_a * vec_b, axis=-1)
+
     if sign_array is not None:
         sign_array[:] = np.sign(dotp)
-    angles = np.arctan(np.linalg.norm(np.cross(vec_a, vec_b), axis=-1) / dotp)
+    angles = np.arctan(np.linalg.norm(np.cross(vec_a, vec_b), axis=-1) / np.maximum(dotp,1e-8))
     if np.isnan(angles).any():
         print('warning: encountered nan value, printing corresponding vectors:')
         index = np.argwhere(np.isnan(angles))
+
         if len(vec_a) == len(angles):
-            print('vec_a:', vec_a[index])
+            print('vec_a1:', vec_a[index])
+            print(vec_a)
         else:
             print('vec_a:', vec_a)
         if len(vec_b) == len(angles):
             print('vec_b:', vec_b[index])
         else:
             print('vec_b:', vec_b)
+        raise ValueError('Encountered nan value in angles. Terminating the function.')
 
     if as_degree:
         return np.rad2deg(angles)
@@ -246,7 +250,7 @@ def merge_o3d_triangle_meshes(meshes):
     :return: a merged o3d.geometry.TriangleMesh
     """
     vertices = np.empty(shape=(0, 3), dtype=np.float64)
-    triangles = np.empty(shape=(0, 3), dtype=np.int)
+    triangles = np.empty(shape=(0, 3), dtype=int)
     for mesh in meshes:
         v = np.asarray(mesh.vertices)  # float list (n, 3)
         t = np.asarray(mesh.triangles)  # int list (n, 3)
@@ -395,3 +399,19 @@ def dict_to_str(dictionary, indent=1):
         else:
             strings.append(f'{indent_str}{str(key)}: {str(value)}')
     return '\n'.join(strings)
+
+def calc_score(d, n_r1, n_r2):
+    signs = np.array([0])
+    #print(d)
+    angle_ref = angle(d, n_r1, sign_array=signs, as_degree=True)
+    angle_ref = np.abs(angle_ref)
+
+    if signs < 0:
+        angle_ref = 180 - angle_ref
+    angle_contact = angle(d, n_r2, sign_array=signs, as_degree=True)
+    angle_contact = np.abs(angle_contact)
+    if signs > 0:
+        angle_contact = 180 - angle_contact
+    score = angle_ref + angle_contact
+    return angle_ref, angle_contact, score
+

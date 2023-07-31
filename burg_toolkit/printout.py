@@ -244,7 +244,7 @@ class Printout:
         order = np.argsort(-z_values)
 
         # get pixel coordinates from world coordinates
-        triangle_points = np.rint(triangles[:, :, :2] * px_per_mm * 1000).astype(np.int32)  # round to int
+        triangle_points = np.rint(triangles[:, :, :2] * px_per_mm * 1000).astype(int32)  # round to int
         # flip y axis, because image coordinate system starts at the top left
         triangle_points[:, :, 1] = image.shape[0] - triangle_points[:, :, 1]
 

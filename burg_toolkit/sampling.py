@@ -1,6 +1,6 @@
 import copy
 import logging
-
+import random
 import numpy as np
 import trimesh
 import open3d as o3d
@@ -56,7 +56,7 @@ class AntipodalGraspSampler:
 
     def __init__(self):
         self.gripper = None
-        self.mu = 0.25
+        self.mu = 0.1
         self.n_orientations = 12
         self.n_rays = 100
         self.min_grasp_width = 0.002
@@ -198,6 +198,7 @@ class AntipodalGraspSampler:
         # let's have a wild guess of how many are many ...
         n_sample = np.max([n, 1000, len(self.mesh.triangles)])
         ref_points = util.o3d_pc_to_numpy(mesh_processing.poisson_disk_sampling(self.mesh, n_points=n_sample))
+
         np.random.shuffle(ref_points)
 
         if self.no_contact_below_z is not None:
@@ -213,7 +214,7 @@ class AntipodalGraspSampler:
             print('mu is', self.mu, 'hence angle of friction cone is', np.rad2deg(angle), '°')
 
         gs = grasp.GraspSet()
-        gs_contacts = np.empty((0, 2, 3))
+        gs_contacts_list = []
         i_ref_point = 0
 
         with tqdm(total=n, disable=not self.verbose) as progress_bar:
@@ -221,6 +222,7 @@ class AntipodalGraspSampler:
                 # todo check if ref point still in range
                 p_r = ref_points[i_ref_point, 0:3]
                 n_r = ref_points[i_ref_point, 3:6]
+                # print(f'sampling ref point no {i_ref_point}: point {p_r}, normal {n_r}')
                 if self.verbose_debug:
                     print(f'sampling ref point no {i_ref_point}: point {p_r}, normal {n_r}')
                 i_ref_point = (i_ref_point + 1) % len(ref_points)
@@ -230,6 +232,8 @@ class AntipodalGraspSampler:
                 ray_origins = np.tile(p_r, (self.n_rays, 1))
                 locations, _, index_tri = intersector.intersects_location(
                     ray_origins, ray_directions, multiple_hits=True)
+                # print('index_tri')
+                # print(index_tri)
                 if self.verbose_debug:
                     print(f'* casting {self.n_rays} rays, leading to {len(locations)} intersection locations')
                 if len(locations) == 0:
@@ -257,8 +261,8 @@ class AntipodalGraspSampler:
                     continue
 
                 normals = mesh_processing.compute_interpolated_vertex_normals(self._trimesh, locations, index_tri)
-
-                if self.verbose_debug:
+                #print(normals)
+                if self.verbose_debug: # use to view the cp and normals and guess the angle
                     # visualize candidate points and normals
 
                     sphere_vis = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
@@ -286,10 +290,10 @@ class AntipodalGraspSampler:
                     # o3d.visualization.draw_geometries(obj_list, point_show_normal=True)
 
                 # compute angles to check antipodal constraints
+
                 d = (locations - p_r).reshape(-1, 3)
                 signs = np.zeros(len(d))
                 angles = util.angle(d, normals, sign_array=signs, as_degree=False)
-
                 # exclude target points which do not have opposing surface orientations
                 # positive sign means vectors are facing into a similar direction as connecting vector, as expected
                 mask_faces_correct_direction = signs > 0
@@ -322,9 +326,7 @@ class AntipodalGraspSampler:
                     if len(locations) == 0:
                         continue
 
-                # actually construct all the grasps (with n_orientations)
-                # todo: maybe we can choose more intelligently here
-                #       e.g. some farthest point sampling so grasps are likely to be more diverse
+
                 if len(locations) > self.max_targets_per_ref_point:
                     indices = np.arange(len(locations))
                     np.random.shuffle(indices)
@@ -337,19 +339,29 @@ class AntipodalGraspSampler:
                 else:
                     grasps = self.construct_grasp_set(p_r, locations, self.n_orientations)
 
-                # also compute the contact points
-                contacts = np.empty((len(locations), 2, 3))
-                contacts[:, 0] = p_r
-                contacts[:, 1] = locations
-                contacts = np.repeat(contacts, self.n_orientations, axis=0)
+                d_vector = (locations - p_r).reshape(-1, 3)
+                target_index_tri = 0
+                target_index = np.where(np.all(locations == locations, axis=1))[0]
+                if len(target_index) > 0:
+                    target_index_tri = index_tri[target_index[0]]
+                normal_con = mesh_processing.compute_interpolated_vertex_normals(self._trimesh, locations, target_index_tri)
+                angle_ref, angle_contact, score = util.calc_score(d_vector,n_r,normal_con)
 
-                gs_contacts = np.concatenate([gs_contacts, contacts], axis=0)
+                points = np.concatenate((p_r, locations.flatten()), axis=0)
+                normals = np.concatenate((n_r,normal_con.flatten()),axis=0)
+                angles = np.concatenate((angle_ref, angle_contact), axis=0)
+                gs_contacts_list.append((points, normals, angles, score))
                 gs.add(grasps)
                 if self.verbose_debug:
                     print(f'* added {len(grasps)} grasps (with {self.n_orientations} orientations for each point pair)')
                 progress_bar.update(len(grasps))
-
-        return gs, gs_contacts
+            gs_contacts = {
+                'points': np.array([item[0] for item in gs_contacts_list], dtype=np.float16).reshape((-1, 2, 3)),
+                'normals': np.array([item[1] for item in gs_contacts_list], dtype=np.float16).reshape((-1, 2, 3)),
+                'angles': np.array([item[2] for item in gs_contacts_list], dtype=np.float16),
+                'score': np.array([item[3] for item in gs_contacts_list]),
+            }
+        return gs, gs_contacts, ref_points
 
     def check_collisions(self, graspset, use_width=True, width_tolerance=0.01, additional_objects=None,
                          exclude_shape=False):
@@ -384,7 +396,7 @@ class AntipodalGraspSampler:
         gripper_mesh.transform(tf)
         gripper_mesh = mesh_processing.as_trimesh(gripper_mesh)
 
-        collision_array = np.empty(len(graspset), dtype=np.bool)
+        collision_array = np.empty(len(graspset), dtype=bool)
 
         if self.verbose:
             print('checking collisions...')
@@ -395,6 +407,47 @@ class AntipodalGraspSampler:
             collision_array[i] = manager.in_collision_single(gripper_mesh, transform=g.pose @ tf_squeeze)
 
         return collision_array
+
+    def randomsample(self, n=10):
+        self._trimesh = mesh_processing.as_trimesh(self.mesh)
+        #intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self._trimesh)
+        n_sample = np.max([n, 1500, len(self.mesh.triangles)])
+        ref_points = util.o3d_pc_to_numpy(mesh_processing.poisson_disk_sampling(self.mesh, n_points=n_sample))
+        np.random.shuffle(ref_points)
+
+        gs = grasp.GraspSet()
+        gs_contacts_list = []
+
+        with tqdm(total=n, disable=not self.verbose) as progress_bar:
+            while len(gs) < n:
+                index = random.randint(0, len(ref_points) - 1)
+                p_r = ref_points[index, 0:3]
+                n_r = ref_points[index, 3:6]
+                q_r = None
+                while q_r is None or (q_r == p_r).all():
+                    inx = random.randint(0, len(ref_points) - 1)
+                    q_r = ref_points[inx, 0:3]
+                    n_r1 = ref_points[inx, 3:6]
+                d = (q_r - p_r).reshape(-1, 3)
+                grasps = self.construct_grasp_set(p_r, q_r, self.n_orientations)
+
+
+                points = np.concatenate((p_r, q_r), axis=0)
+                normals = np.concatenate((n_r, n_r1), axis=0)
+                angle_ref, angle_contact, score = util.calc_score(d,n_r,n_r1)
+                angles = np.concatenate((angle_ref, angle_contact), axis=0)
+
+
+                gs_contacts_list.append((points, normals, angles, score))
+                gs.add(grasps)
+
+            gs_contacts = {
+                'points': np.array([item[0] for item in gs_contacts_list], dtype=np.float16).reshape((-1, 2, 3)),
+                'normals': np.array([item[1] for item in gs_contacts_list], dtype=np.float16).reshape((-1, 2, 3)),
+                'angles': np.array([item[2] for item in gs_contacts_list], dtype=np.float16),
+                'score': np.array([item[3] for item in gs_contacts_list]),
+            }
+        return gs, gs_contacts
 
 
 def grasp_perturbations(grasps, radii=None, include_original_grasp=True):

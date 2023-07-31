@@ -9,6 +9,8 @@ from . import core
 from . import util
 from . import grasp
 
+from . import io
+
 
 def _convert_geometries_to_o3d_objects(geometry_list):
     """
@@ -36,6 +38,12 @@ def _convert_geometries_to_o3d_objects(geometry_list):
             o3d_objs.append(geometry.get_mesh())
         elif isinstance(geometry, core.Scene):
             o3d_objs.extend(geometry.get_mesh_list())
+        elif isinstance(geometry, o3d.geometry.LineSet):
+            lines = o3d.geometry.LineSet()
+            lines.points = geometry.points
+            lines.lines = geometry.lines
+            lines.colors = geometry.colors
+            o3d_objs.append(lines)
         else:
             raise TypeError(f'geometry in list is of unsupported type {type(geometry)}')
 
@@ -57,7 +65,7 @@ def show_geometries(geometry_list, colorize=True):
 
     if colorize:
         _colorize_o3d_objects(o3d_objs)
-    o3d.visualization.draw(o3d_objs)
+    o3d.visualization.draw_geometries(o3d_objs)
 
 
 def _colorize_o3d_objects(o3d_objects, colormap_name='tab20'):
@@ -166,3 +174,54 @@ def create_frame(size=0.01, pose=None):
     if pose is not None:
         frame.transform(pose)
     return frame
+
+
+def plot_contacts_normals(mesh, cp1,cp2,normal1,normal2):
+    connecting_vector = cp2 - cp1
+    # transparency = 0.0001
+    # num_vertices = len(mesh.vertices)
+    # transparent_colors = np.array([[1, 1, 1, transparency]] * num_vertices)
+    # mesh.vertex_colors = o3d.utility.Vector3dVector(transparent_colors[:, :3])
+    # mesh.vertex_colors = o3d.utility.Vector3dVector(transparent_colors[:, :3])
+
+    c1_vis = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+    c2_vis = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)#create another sphere for 2nd cp
+    c1_vis.translate(cp1)
+    c2_vis.translate(cp2)
+
+    obj_list = [c1_vis, c2_vis]
+
+    line = o3d.geometry.LineSet()
+    line.points = o3d.utility.Vector3dVector(np.array([cp1, cp2]))
+    line.lines = o3d.utility.Vector2iVector(np.array([[0, 1]]))
+    line.colors = o3d.utility.Vector3dVector(np.array([[1, 0, 0]]))
+    obj_list.append(line)
+
+    arrow = o3d.geometry.TriangleMesh.create_arrow(
+        cylinder_radius=3 / 10000,
+        cone_radius=1.5 / 10000,
+        cylinder_height=15.0 / 1000,
+        cone_height=4.0 / 1000,
+        resolution=20,
+        cylinder_split=4,
+        cone_split=1)
+    arrow.compute_vertex_normals()
+    my_arrow = o3d.geometry.TriangleMesh(arrow)
+    my_arrow.rotate(util.rotation_to_align_vectors([0, 0, 1], normal1), center=[0, 0, 0])
+    my_arrow.translate(cp1)
+    obj_list.append(my_arrow)
+    arrow1 = o3d.geometry.TriangleMesh.create_arrow(
+        cylinder_radius=3 / 10000,
+        cone_radius=1.5 / 10000,
+        cylinder_height=15.0 / 1000,
+        cone_height=4.0 / 1000,
+        resolution=20,
+        cylinder_split=4,
+        cone_split=1)
+    arrow1.compute_vertex_normals()
+    my_arrow1 = o3d.geometry.TriangleMesh(arrow1)
+    my_arrow1.rotate(util.rotation_to_align_vectors([0, 0, 1], normal2), center=[0, 0, 0])
+    my_arrow1.translate(cp2)
+    obj_list.append(my_arrow1)
+
+    show_geometries(obj_list)

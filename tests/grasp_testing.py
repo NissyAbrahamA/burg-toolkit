@@ -65,23 +65,94 @@ def test_distance_and_coverage():
     print('in total, this took:', timer() - t1, 'seconds')
 
 
+
 def test_new_antipodal_grasp_sampling():
+    redo = []
     gripper_model = burg.gripper.ParallelJawGripper(finger_length=0.03,
                                                     finger_thickness=0.003)
-    mesh_fn = '../data/samples/flathead-screwdriver/flatheadScrewdriverMediumResolution.ply'
+    with open("objects.txt", "r") as file:
+        object_names = file.read().splitlines()
 
-    ags = burg.sampling.AntipodalGraspSampler()
-    ags.mesh = burg.io.load_mesh(mesh_fn)
-    ags.gripper = gripper_model
-    ags.n_orientations = 18
-    ags.verbose = True
-    ags.max_targets_per_ref_point = 1
-    graspset, contacts = ags.sample(100)
-    # gs.scores = ags.check_collisions(gs, use_width=False)  # need to install python-fcl
-    print('len graspset', len(graspset))
-    print('contacts.shape', contacts.shape)
-    burg.visualization.show_grasp_set([ags.mesh], graspset, gripper=gripper_model, use_width=False,
-                                      score_color_func=lambda s: [s, 1-s, 0], with_plane=True)
+    for object_name in object_names:
+        mesh_fn = f"C:/Users/anizy/OneDrive - Aston University/Desktop/Dissertation/pointcloud/models/ycb/{object_name}/google_16k/textured.obj"
+
+        #mesh_fn= '../input/002_master_chef_can_pointcloud.ply'
+        #obj_name = os.path.splitext(os.path.basename(mesh_fn))[0]
+        #mesh = o3d.io.read_triangle_mesh(mesh_fn)
+        #n_sample = np.max([500, 1000, len(mesh.triangles)])
+        #pc_with_normals = burg.util.o3d_pc_to_numpy(burg.mesh_processing.poisson_disk_sampling(mesh, n_points=n_sample))
+        #pc_with_normals = burg.util.o3d_pc_to_numpy(burg.mesh_processing.poisson_disk_sampling(mesh))
+        #np.save(object_name + '_pc.npy', pc_with_normals)
+
+        ags = burg.sampling.AntipodalGraspSampler()
+        ags.mesh = burg.io.load_mesh(mesh_fn)
+        ags.gripper = gripper_model
+        ags.n_orientations = 1
+        ags.verbose = True
+        ags.max_targets_per_ref_point = 1
+        graspset, contacts, pc_with_normals = ags.sample(500)
+        np.save(object_name + '_pc.npy', pc_with_normals)
+        #print(contacts[0])
+        #contacts_with_mscore = np.copy(contacts)
+        # for c in contacts:
+        #     nc = np.concatenate((c[:2], np.expand_dims(c[2], axis=0)))
+        #     contacts_with_mscore.append(nc)
+        # contacts_with_mscore = np.array(contacts_with_mscore)
+        #contacts_with_mscore[:, 2:5] = contacts_with_mscore[:, 2:3]
+        # contacts_with_mscore = np.array([list(np.unique(row)) for row in contacts])
+        # print(contacts_with_mscore[0])
+        graspset.scores = ags.check_collisions(graspset, use_width=False)  # need to install python-fcl
+        filtered_grasps_contacts = {}
+        filtered_grasps_contacts['points'] = []
+        filtered_grasps_contacts['normals'] = []
+        filtered_grasps_contacts['angles'] = []
+        filtered_grasps_contacts['score'] = []
+        for grasp, score, contact,normals,angles,cp_score in zip(graspset, graspset.scores, contacts['points'],contacts['normals'],contacts['angles'],contacts['score']):
+            if score == 1.0:
+                filtered_grasps_contacts['points'].append(contact)
+                filtered_grasps_contacts['normals'].append(normals)
+                filtered_grasps_contacts['angles'].append(angles)
+                filtered_grasps_contacts['score'].append(cp_score)
+
+        if len(filtered_grasps_contacts['points']) < 90:
+            redo.append(object_name)
+        print(redo)
+        np.savez(object_name + "_mu0.1.npz", **filtered_grasps_contacts)
+
+def test_antipodal_grasp_random_sampling():
+    redo = []
+    gripper_model = burg.gripper.ParallelJawGripper(finger_length=0.03,
+                                                    finger_thickness=0.003)
+    with open("objects.txt", "r") as file:
+        object_names = file.read().splitlines()
+
+    for object_name in object_names:
+        mesh_fn = f"C:/Users/anizy/OneDrive - Aston University/Desktop/Dissertation/pointcloud/models/ycb/{object_name}/google_16k/textured.obj"
+        ags = burg.sampling.AntipodalGraspSampler()
+        ags.mesh = burg.io.load_mesh(mesh_fn)
+        ags.gripper = gripper_model
+        ags.n_orientations = 1
+        ags.verbose = True
+        ags.max_targets_per_ref_point = 1
+        graspset, contacts = ags.randomsample(5000)
+        graspset.scores = ags.check_collisions(graspset, use_width=False)
+        filtered_grasps_contacts = {}
+        filtered_grasps_contacts['points'] = []
+        filtered_grasps_contacts['normals'] = []
+        filtered_grasps_contacts['angles'] = []
+        filtered_grasps_contacts['score'] = []
+        for grasp, score, contact,normals,angles,cp_score in zip(graspset, graspset.scores, contacts['points'],contacts['normals'],contacts['angles'],contacts['score']):
+            if score == 1.0:
+                filtered_grasps_contacts['points'].append(contact)
+                filtered_grasps_contacts['normals'].append(normals)
+                filtered_grasps_contacts['angles'].append(angles)
+                filtered_grasps_contacts['score'].append(cp_score)
+
+        if len(filtered_grasps_contacts['points']) < 1500:
+            redo.append(object_name)
+        print(redo)
+        np.savez(object_name + "_random.npz", **filtered_grasps_contacts)
+
 
 
 def test_rotation_to_align_vectors():
@@ -111,7 +182,7 @@ def test_angles():
     vec_a = np.array([1, 0, 0])
     vec_b = np.array([-1, 0, 0])
     mask = np.array([0])
-
+    print(mask)
     a = burg.util.angle(vec_a, vec_b, sign_array=mask)
     print(a)
     print(mask)
@@ -135,14 +206,32 @@ def visualise_perturbations():
     gripper = burg.gripper.ParallelJawGripper(finger_length=0.03, finger_thickness=0.003, opening_width=0.05)
     burg.visualization.show_grasp_set([], gs_perturbed, gripper=gripper)
 
+def test_scoring_for_grippers():
+    mesh_fn = "C:/Users/anizy/OneDrive - Aston University/Desktop/Dissertation/pointcloud/models/ycb/002_master_chef_can/google_16k/textured.obj"
+    mesh = burg.io.load_mesh(mesh_fn)
+    cp1 = np.array([0.00910593, 0.00076649, 0.01397331])
+    cp2 = np.array([-0.03230069,  0.03238435,  0.02414111])
+    normal1 = np.array([0.34267149, - 0.89084227, - 0.29828896])
+    normal2 = np.array([-0.83048282,  0.53533904,  0.15398183])
+    d = (cp2-cp1)
+    print(d)
+    angle_cp1, angle_cp2, score = burg.util.calc_score(d,normal1, normal2)
+    print(angle_cp2)
+    print(angle_cp1)
+    print('score:' + str(score))
+    burg.visualization.plot_contacts_normals(mesh,cp1,cp2,normal1,normal2)
+
+
 
 if __name__ == "__main__":
     print('hi')
     # test_distance_and_coverage()
     # test_rotation_to_align_vectors()
-    # test_angles()
+    #test_angles()
     # test_cone_sampling()
     #test_new_antipodal_grasp_sampling()
     #show_grasp_pose_definition()
-    visualise_perturbations()
+    #visualise_perturbations()
+    test_scoring_for_grippers()
+    #test_antipodal_grasp_random_sampling()
     print('bye')
